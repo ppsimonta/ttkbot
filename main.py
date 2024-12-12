@@ -1,249 +1,168 @@
+import requests
+from bs4 import BeautifulSoup
 import discord
 from discord.ext import commands
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager  
-import time
 
 
-TOKEN = 'asdasd'
+TOKEN = 'your token'
 
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-#ar
-def fetch_ar_info():
-    chrome_service = Service(ChromeDriverManager().install())
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")  
+def get_tiers():
+    tier_dict = {}
+    url_dict = {}
+    url = "https://warzoneloadout.games/warzone-meta/"
 
-    driver = webdriver.Chrome(service=chrome_service, options=chrome_options)
-    driver.get('https://wzstats.gg/warzone/meta/long-range-meta')
+    response = requests.get(url)
+    soup = BeautifulSoup(response.content, 'html.parser')
+    tier_section = soup.find_all('section', class_="new_mobile-tier-section")
 
-    WebDriverWait(driver, 10).until(
-        EC.presence_of_element_located((By.CSS_SELECTOR, 'table'))
-    )
+    for section in tier_section:
+        tier = section.find('h2', class_="new_tier-title")
+        tier_name = tier.text
+        names = section.find_all('h3', class_="new_weapon-name")
+        labels = section.find_all('div', class_="loadoutlabelbo6")
 
-    name_part_elements = driver.find_elements(By.CLASS_NAME, "name-part")
-    ttk_part_elements = driver.find_elements(By.CLASS_NAME, "table-stats-display-container")
+        guns = []
+        for index_name, name in enumerate(names):
+            gun_name = name.text
+            guns.append(gun_name)
+            label = labels[index_name]
+            styles = label.find_all("span", "new_weapon-playstylebo6")
+            url_dict[gun_name] = styles[-1].text
+        tier_dict[tier_name] = guns
 
-    ttk = []
-    weapons = []
+    return tier_dict, url_dict
 
-    for element in name_part_elements:
-        weapons.append(element.text)
+def get_meta(gun, url_dict):
+    game = url_dict[gun]
+    gun_url = gun.replace(" ", "-").replace(".", "-").lower()
+    url = f"https://warzoneloadout.games/{game}/{gun_url}/"
+    response = requests.get(url)
 
-    for i in range(0, len(ttk_part_elements), 4):
-        ttk.append(ttk_part_elements[i].text)
+    soup = BeautifulSoup(response.content, 'html.parser')
+    rows = soup.find('div', class_="attachments_weapondetailled")
+    if rows is None:
+        rows = soup.find('div', class_="attachments_container_loadouts")
 
-    combined = list(zip(weapons, ttk))
-    combined = [(weapon, float(ttk_value.replace(',', ''))) for weapon, ttk_value in combined]
+    attachments = []
+    for row in rows:
+        try:
+            label = row.find('span', class_='attachment_label_weapondetailled').text.strip(':')
+            name = row.find('span', class_='attachment_name_weapondetailled').text
+        except AttributeError:
+            label = row.find('div', class_='detail-new-attachment__slot_loadouts').text.strip(':')
+            name = row.find('div', class_='detail-new-attachment__name_loadouts').text
+        attachments.append(f"{label}: {name}")
+
+    return attachments
 
 
-    combined.sort(key=lambda x: x[1])
 
+#botti hommat
+tier_dict, url_dict = get_tiers()
 
-    top_20_combined = combined[:20] 
-
-
-    message = ""
-    for index, (weapon, ttk_value) in enumerate(top_20_combined, 1):
-        message += f"{index}. Weapon: {weapon}, TTK: {ttk_value}\n"
-
-    driver.quit()
-
-    return message
+user_state = {}
 
 @bot.command()
-@commands.cooldown(1, 60, commands.BucketType.user)  
-async def ar_meta(ctx):
-    try:
-        ar_meta_message = fetch_ar_info()
-        await ctx.send(ar_meta_message)
-    except Exception as e:
-        await ctx.send("Tapahtui virhe: " + str(e))
+async def meta(ctx):
+    """Start the tier and gun selection process"""
+    user_state[ctx.author.id] = {"step": "tier", "attempts": 0}
+    tiers = "\n".join([f"{index + 1}: {tier}" for index, tier in enumerate(tier_dict.keys())])
+    await ctx.send(f"Choose a tier by sending its number:\n{tiers}")
 
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
 
-@ar_meta.error
-async def ar_meta_error(ctx, error):
-    if isinstance(error, commands.CommandOnCooldown):
-        await ctx.send(f"Voit lähettää viestin minuutin välein. Yritä uudelleen {round(error.retry_after, 2)} sekunnin kuluttua.")
+    user_id = message.author.id
+    if user_id in user_state:
+        state = user_state[user_id]
 
+        if state["step"] == "tier":
+            try:
+                tier_index = int(message.content) - 1
+                tier_list = list(tier_dict.keys())
+
+                if tier_index < 0 or tier_index >= len(tier_list):
+                    state["attempts"] += 1
+                    if state["attempts"] >= 2:
+                        await message.channel.send("Loppu se spämmi.")
+                        del user_state[user_id]
+                        return
+
+                    await message.channel.send("Invalid tier number. Please try again.")
+                    return
+
+                selected_tier = tier_list[tier_index]
+                user_state[user_id]["tier"] = selected_tier
+                user_state[user_id]["step"] = "gun"
+                user_state[user_id]["attempts"] = 0
+
+                guns = "\n".join([f"{index + 1}: {gun}" for index, gun in enumerate(tier_dict[selected_tier])])
+                await message.channel.send(f"Now choose a gun by sending its number:\n{guns}")
+            except ValueError:
+                state["attempts"] += 1
+                if state["attempts"] >= 2:
+                    await message.channel.send("Loppu se spämmi.")
+                    del user_state[user_id]
+                    return
+                await message.channel.send("Please send a valid number.")
+
+        elif state["step"] == "gun":
+            try:
+                gun_index = int(message.content) - 1
+                selected_tier = user_state[user_id]["tier"]
+                guns_list = tier_dict[selected_tier]
+
+                if gun_index < 0 or gun_index >= len(guns_list):
+                    state["attempts"] += 1
+                    if state["attempts"] >= 2:
+                        await message.channel.send("Loppu se spämmi.")
+                        del user_state[user_id]
+                        return
+
+                    await message.channel.send("Invalid gun number. Please try again.")
+                    return
+
+                selected_gun = guns_list[gun_index]
+                user_state[user_id]["gun"] = selected_gun
+                user_state[user_id]["step"] = None  # End the process
+                user_state[user_id]["attempts"] = 0
+
+                attachments = get_meta(selected_gun, url_dict)
+                attachments_message = "\n".join(attachments)
+
+                await message.channel.send(f"Meta for {selected_gun}:\n{attachments_message}")
+
+                # Clear user state
+                del user_state[user_id]
+            except ValueError:
+                state["attempts"] += 1
+                if state["attempts"] >= 2:
+                    await message.channel.send("Loppu se spämmi.")
+                    del user_state[user_id]
+                    return
+                await message.channel.send("Please send a valid number.")
+
+        return
+
+    await bot.process_commands(message)
 
 @bot.command()
 async def coms(ctx):
-    help_message = """
-**Tässä ovat käytettävissä olevat komennot:**
-1. `!ar_meta` - Long range meta top20.
-2. `!smg_meta` - Smg meta top20.
-3. `!sniper_meta` - Sniper tiedot.
-"""
-    await ctx.send(help_message)
+    """List all available commands and explain the meta command"""
+    commands_list = """
+    **Available Commands:**
+    1. `!meta` - Starts the tier and gun selection process for Warzone. 
+       - First, you'll select a tier (e.g., 1, 2).
+       - Then, you'll choose a gun within that tier (e.g., 1, 2).
+       - After selecting the gun, the bot will provide the recommended attachments (meta) for that gun.
+    """
+    await ctx.send(commands_list)
 
-
-@bot.event
-async def on_ready():
-    print(f'{bot.user} on valmiina!')  
-
-
-#smg
-def fetch_smg_info():
-    chrome_service = Service(ChromeDriverManager().install())
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-
-    driver = webdriver.Chrome(service=chrome_service, options=chrome_options)
-    driver.get('https://wzstats.gg/warzone/meta/close-range-meta')
-
-    WebDriverWait(driver, 10).until(
-        EC.presence_of_element_located((By.CSS_SELECTOR, 'table'))
-    )
-
-    name_part_elements_smg = driver.find_elements(By.CLASS_NAME, "name-part")
-    ttk_part_elements_smg = driver.find_elements(By.CLASS_NAME, "table-stats-display-container")
-
-    ttk_smg = []
-    weapons_smg = []
-
-    for element in name_part_elements_smg:
-        weapons_smg.append(element.text)
-
-    for i in range(0, len(ttk_part_elements_smg), 4):
-        ttk_smg.append(ttk_part_elements_smg[i].text)
-
-    combined = list(zip(weapons_smg, ttk_smg))
-    combined = [(weapon, float(ttk_value.replace(',', ''))) for weapon, ttk_value in combined]
-
-    combined.sort(key=lambda x: x[1])
-    
-    top_20_combined = combined[:20]
-
-    message = ""
-    for index, (weapon, ttk_value) in enumerate(top_20_combined, 1):
-        message += f"{index}. Weapon: {weapon}, TTK: {ttk_value}\n"
-
-    driver.quit()
-
-    return message
-
-@bot.command()
-@commands.cooldown(1, 60, commands.BucketType.user)  
-async def smg_meta(ctx):
-    try:
-        smg_meta_message = fetch_smg_info()
-        await ctx.send(smg_meta_message)
-    except Exception as e:
-        await ctx.send("Tapahtui virhe: " + str(e))
-
-@smg_meta.error
-async def smg_meta_error(ctx, error):
-    if isinstance(error, commands.CommandOnCooldown):
-        await ctx.send(f"Voit lähettää viestin minuutin välein. Yritä uudelleen {round(error.retry_after, 2)} sekunnin kuluttua.")
-
-#sniper
-def fetch_sniper_info():
-    chrome_service = Service(ChromeDriverManager().install())
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-
-    driver = webdriver.Chrome(service=chrome_service, options=chrome_options)
-    driver.get('https://wzstats.gg/warzone/meta/sniper-meta')
-
-    WebDriverWait(driver, 10).until(
-        EC.presence_of_element_located((By.CSS_SELECTOR, 'table'))
-    )
-
-    sn_name_part_elements = driver.find_elements(By.CLASS_NAME, "name-part")
-    sn_info_part_elements = driver.find_elements(By.CLASS_NAME, "table-stats-display-container")
-
-    sn_info = []
-    sn_weapons = []
-
-    for element in sn_name_part_elements:
-        sn_weapons.append(element.text)
-
-    for element in sn_info_part_elements:
-        sn_info.append(element.text)
-
-    info_chunks = [sn_info[i:i + 4] for i in range(0, len(sn_info), 4)]
-
-    info_fields = ["One shot(m)", "ADS(ms)", "BV(ms)", "Mobility"]
-
-    combined = []
-    for weapon, info in zip(sn_weapons, info_chunks):
-        named_info = dict(zip(info_fields, info))
-        combined.append((weapon, named_info))
-
-    message = ""
-    for index, (weapon, info) in enumerate(combined, 1):
-        info_message = ", ".join([f"{key}: {value}" for key, value in info.items()])
-        message += f"{index}. {weapon}, {info_message}\n"
-
-    driver.quit()
-
-    return message
-
-@bot.command()
-@commands.cooldown(1, 60, commands.BucketType.user)
-async def sniper_meta(ctx):
-    try:
-        sniper_meta_message = fetch_sniper_info()
-        await ctx.send(sniper_meta_message)
-    except Exception as e:
-        await ctx.send("Tapahtui virhe: " + str(e))
-
-@sniper_meta.error
-async def sniper_meta_error(ctx, error):
-    if isinstance(error, commands.CommandOnCooldown):
-        await ctx.send(f"Voit lähettää viestin minuutin välein. Yritä uudelleen {round(error.retry_after, 2)} sekunnin kuluttua.")
-
-# AR OSAT
-def fetch_ar_parts():
-    chrome_service = Service(ChromeDriverManager().install())
-    chrome_options = Options()
-    
-    driver = webdriver.Chrome(service=chrome_service, options=chrome_options)
-    driver.get('https://wzstats.gg/warzone-2/guns/long-range/ar')
-
-    WebDriverWait(driver, 10).until(
-        EC.presence_of_element_located((By.CLASS_NAME, 'content-container-article'))
-    )
-
-    scroll_nb = 20
-    page_height = driver.execute_script("return document.body.scrollHeight")
-    scrolls = round(page_height / scroll_nb)
-
-    for x in range(scroll_nb):
-        driver.execute_script(f"window.scrollBy(0, {scrolls})")
-        time.sleep(1)
-
-    gun_name_elements = driver.find_elements(By.CLASS_NAME, "article-card-header")
-    
-     # Extract and print the names of the guns
-    gun_names = [element.text for element in gun_name_elements]
-    print(gun_names)
-    
-    driver.quit()
-
-
-
-# Lisää testauslohko
-if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) > 1 and sys.argv[1] == "test":
-        try:
-            print("Fetching AR info for testing...")
-            result = fetch_ar_parts()
-            print(result)
-        except Exception as e:
-            print("Tapahtui virhe:", e)
-    else:
-        bot.run(TOKEN)
-
+bot.run(TOKEN)

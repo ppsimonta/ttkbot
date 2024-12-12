@@ -1,23 +1,19 @@
-# Discord Bot for Warzone Meta Information
+# Warzone Meta Discord Bot
 
-This Discord bot provides users with up-to-date information about the top 20 long-range weapons in Call of Duty: Warzone, based on their Time-to-Kill (TTK). It uses Selenium to scrape data from the website.
+This Discord bot helps players find the best weapon loadouts and attachments for **Call of Duty: Warzone** based on the current meta.
 
----
+The bot fetches tier and weapon data from [Warzone Loadout](https://warzoneloadout.games/warzone-meta/), allowing users to select tiers and weapons, and then view the recommended attachments (meta) for those weapons.
 
 ## Features
 
-- Fetches and displays the top 20 long-range weapons with their respective TTK values.
-- Simple commands for ease of use.
-- Implements cooldowns to prevent spamming.
+- **Tier Selection**: Users can choose a tier, and then pick a weapon from that tier.
+- **Gun Selection**: After selecting a tier, the bot will show all available guns in that tier. The user can then select a gun.
+- **Meta Information**: After selecting a gun, the bot will fetch the recommended attachments (meta) for that specific weapon.
 
----
+## Setup and Installation
 
-## Prerequisites
+1. Clone this repository to your local machine.
+2. Install the necessary dependencies:
 
-Ensure you have the following:
-
-- **Discord Developer Token**  
-  Create a bot application on the [Discord Developer Portal](https://discord.com/developers/applications) and copy the bot token.  
-  Replace the `TOKEN` variable in the script with your bot's token:
-  ```python
-  TOKEN = 'your-discord-bot-token'
+   ```bash
+   pip install requests beautifulsoup4 discord.py
